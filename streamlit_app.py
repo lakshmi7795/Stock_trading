@@ -14,7 +14,7 @@ st.title("AI Stock Signal Predictor")
 # --- Telegram Bot Config
 TOKEN = "7647392071:AAGjFGHdFd5pSfBLwgKp9iFsL0O94u2kDZY"
 CHAT_ID = "5570374030"
-REFRESH_INTERVAL = 3600  # 1 hour
+REFRESH_INTERVAL = 3600  # 1 hour in seconds
 
 # --- Auto-refresh tracker
 if "last_refresh" not in st.session_state:
@@ -33,16 +33,19 @@ df = yf.download(stock, period="7d", interval="30m", progress=False)
 
 # --- Check if data is returned
 if not df.empty:
-    close_prices = df['Close'].to_numpy().flatten()
-    index = df.index
+    # ✅ Ensure df['Close'] is a proper 1D Series
+    if isinstance(df['Close'], pd.DataFrame):
+        close_prices = df['Close'].iloc[:, 0]
+    else:
+        close_prices = df['Close']
 
-    # --- Add technical indicators safely
-    df['rsi'] = pd.Series(ta.momentum.RSIIndicator(close=close_prices).rsi(), index=index)
-    df['macd'] = pd.Series(ta.trend.MACD(close=close_prices).macd(), index=index)
-    df['ema_20'] = pd.Series(ta.trend.EMAIndicator(close=close_prices, window=20).ema_indicator(), index=index)
+    # --- Add technical indicators
+    df['rsi'] = ta.momentum.RSIIndicator(close=close_prices).rsi()
+    df['macd'] = ta.trend.MACD(close=close_prices).macd()
+    df['ema_20'] = ta.trend.EMAIndicator(close=close_prices, window=20).ema_indicator()
     df.dropna(inplace=True)
 
-    # --- Create target for AI model
+    # --- AI model
     df['target'] = (df['Close'].shift(-1) > df['Close']).astype(int)
     df.dropna(inplace=True)
 
@@ -51,7 +54,7 @@ if not df.empty:
     model = RandomForestClassifier()
     model.fit(X, y)
 
-    # --- Predict for latest candle
+    # --- Predict on latest row
     latest = df.iloc[-1][['rsi', 'macd', 'ema_20']].values.reshape(1, -1)
     if np.any(np.isnan(latest)) or np.any(np.isinf(latest)):
         st.warning("⚠️ Not enough clean data to predict.")
@@ -60,21 +63,21 @@ if not df.empty:
         signal = "BUY" if pred == 1 else "WAIT"
         st.metric(label="📈 AI Signal", value=signal)
 
-        # --- Send Telegram Alert
+        # --- Telegram alert
         if signal == "BUY" and st.session_state.last_refresh <= time.time() - REFRESH_INTERVAL:
-            msg = f"📢 BUY Alert: {stock} is signaling BUY"
+            msg = f"📢 BUY Alert: {stock} is showing a BUY signal"
             url = f"https://api.telegram.org/bot{TOKEN}/sendMessage?chat_id={CHAT_ID}&text={msg}"
             requests.get(url)
             st.success("✅ Telegram alert sent!")
 
-    # --- Display stock chart
+    # --- Chart display
     st.subheader(f"{stock} Price Chart")
     st.line_chart(df['Close'])
 
 else:
-    st.error("❌ Failed to fetch stock data. Try again later.")
+    st.error("❌ Failed to fetch stock data. Try another stock or check your connection.")
 
-# --- Trigger rerun after refresh interval
+# --- Auto-rerun after interval
 if time_remaining <= 0:
     st.session_state.last_refresh = time.time()
     st.experimental_rerun()
